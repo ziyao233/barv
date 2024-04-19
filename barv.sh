@@ -28,7 +28,7 @@ echo Memory size: ${#mem[@]} Bytes
 echo Register Num: ${#reg[@]}
 
 # $1: addr, $2: data
-store_quad_arg() {
+store_long_arg() {
 	mem[$(($1 + 0))]=$((($2 >> 24) & 0xff))
 	mem[$(($1 + 1))]=$((($2 >> 16) & 0xff))
 	mem[$(($1 + 2))]=$((($2 >> 8) & 0xff))
@@ -36,7 +36,7 @@ store_quad_arg() {
 }
 
 # $1: addr
-load_quad() {
+load_long() {
 	local a=${mem[$(($1 + 0))]}
 	local b=${mem[$(($1 + 1))]}
 	local c=${mem[$(($1 + 2))]}
@@ -49,8 +49,8 @@ load_into_memory() {
 	local filename=$2
 
 	local i=0
-	for quad in `hexdump -ve '"%d "' $filename`; do
-		store_quad_arg $i $quad
+	for long in `hexdump -ve '"%d "' $filename`; do
+		store_long_arg $i $long
 		i=$(($i + 4))
 	done
 }
@@ -63,7 +63,7 @@ fi
 load_into_memory 0 $1
 
 fetch_inst() {
-	load_quad $reg_pc
+	load_long $reg_pc
 	inst=$fetched_data
 	reg_pc=$(($reg_pc + 4))
 }
@@ -99,9 +99,21 @@ limit_width() {
 	fetched_data=$(($fetched_data & 0xffffffff))
 }
 
+sign_extend8() {
+	if [ $(($fetched_data & 0x80)) == 128 ]; then
+		fetched_data=$(($fetched_data | 0xffffff00))
+	fi
+}
+
 sign_extend12() {
 	if [ $(($fetched_data & 0x800)) == 2048 ]; then
 		fetched_data=$(($fetched_data | 0xfffff000))
+	fi
+}
+
+sign_extend16() {
+	if [ $(($fetched_data & 0x8000)) == 32768 ]; then
+		fetched_data=$(($fetched_data | 0xffff0000))
 	fi
 }
 
@@ -199,18 +211,87 @@ imm_ops() {
 	set_to_rd
 }
 
+load_short() {
+	local a=${mem[$(($1 + 0))]}
+	local b=${mem[$(($1 + 1))]}
+	fetched_data=$(((a << 8) | (b << 0)))
+}
+
+unsupported_instruction() {
+	echo unsupported instruction
+	echo "native representation (inst: $inst), (pc: $pc - 4)"
+	printf "instruction %08x, pc=%08x\n" $inst $(($reg_pc - 4))
+	exit -1
+}
+
 load_ops() {
+	load_from_rs1
+	fetched_data=$(($inst >> 20))
+	sign_extend12
+	fetched_data=$(($rs1 + $fetched_data))
+	limit_width
+	local addr=$fetched_data
+
+	case $((($inst >> 12) & 0x7)) in
+	0)	# 000, lb
+		fetched_data=${mem[$addr]}
+		sign_extend8 ;;
+	1)	# 001, lh
+		load_short $addr
+		sign_extend16 ;;
+	2)	# 010, lw
+		load_long $addr ;;
+	4)	# 100, lbu
+		fetched_data=${mem[$addr]} ;;
+	5)	# 101, lhu
+		load_short $addr ;;
+	*)
+		unsupported_instruction ;;
+	esac
+
+	set_to_rd
+}
+
+# $1: addr, $2: data
+store_short_arg() {
+	mem[$(($1 + 0))]=$((($2 >> 8) & 0xff))
+	mem[$(($1 + 1))]=$((($2 >> 0) & 0xff))
+}
+
+store_ops() {
+	load_from_rs1
+	fetched_data=$((($inst & 0xff000000) >> 20))
+	fetched_data=$(($fetched_data | (($inst >> 7) & 0x1f)))
+	sign_extend12
+	fetched_data=$(($rs1 + $fetched_data))
+	limit_width
+	local addr=$fetched_data
+
+	load_from_rs2
+	case $((($inst >> 12) & 0x7)) in
+	0)	# 000, sb
+		mem[$addr]=$(($rs2 & 0xff)) ;;
+	1)	# 001, sh
+		store_short_arg $addr $rs2 ;;
+	2)	# 010, sw
+		store_long_arg $addr $rs2 ;;
+	*)	unsupported_instruction ;;
+	esac
 }
 
 while true; do
 	fetch_inst
 
 	case $(($inst & 0x7f)) in
+	$((0x03)))	# load ops
+		load_ops ;;
+	$((0x23)))	# store ops
+		store_ops ;;
 	$((0x37)))	# lui
 		fetched_data=$(($inst & 0xfffff000))
 		set_to_rd ;;
 	$((0x17)))	# auipc
-		fetched_data=$((($inst & 0xfffff000) + $reg_pc))
+		fetched_data=$((($inst & 0xfffff000) + $reg_pc - 4))
 		limit_width
 		set_to_rd ;;
 	$((0x13)))	# imm ops
@@ -222,9 +303,7 @@ while true; do
 			dump_registers
 		fi ;;
 	*)
-		echo "native representation (inst: $inst) (pc: $reg_pc)"
-		printf "unsupported instruction %08x, pc=%08x\n" $inst $reg_pc
-		exit -1 ;;
+		unsupported_instruction ;;
 	esac
 done
 
