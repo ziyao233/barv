@@ -143,10 +143,10 @@ less_than_data() {
 
 # $1: left
 less_than_data_sign() {
-	local r=$(($1 - $fetched_data))
+	local r=$((($1 - $fetched_data) & 0xffffffff))
 	local rs=$(($r & 0x80000000))
 	local of=0
-	if [ $(($1 & 0x80000000)) == $(($fetched_data & 0x80000000)) ]; then
+	if [ $(($1 & 0x80000000)) != $(($fetched_data & 0x80000000)) ]; then
 		if [ $(($1 & 0x80000000)) == $rs ]; then
 			of=0
 		else
@@ -154,7 +154,7 @@ less_than_data_sign() {
 		fi
 	fi
 
-	[ $rs != $(($of << 31)) ]
+	[ $rs != $of ]
 	return
 }
 
@@ -286,7 +286,6 @@ load_ops() {
 
 	case $((($inst >> 12) & 0x7)) in
 	0)	# 000, lb
-		echo $addr
 		fetched_data=${mem[$addr]}
 		sign_extend8 ;;
 	1)	# 001, lh
