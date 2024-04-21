@@ -190,23 +190,71 @@ imm_ops() {
 		fetched_data=$(($rs1 << $fetched_data)) ;;
 	5)	# 101, srli, srai
 		local shamt=$(($fetched_data & 0x1f))
-		echo shamt: $shamt
 		if [ $(($fetched_data & 0x400)) != 0 ]; then
-			echo srai
 			# srai
 			local sign=$(($rs1 & 0x80000000))
 			fetched_data=$(($rs1 >> $shamt))
 			if [ $sign != 0 ]; then
 				local m=$(((1 << ($shamt + 1)) - 1))
-				m=$((m << (32 - $shamt)))
-				fetched_data=$(($fetched_data | m))
+				m=$(($m << (32 - $shamt)))
+				fetched_data=$(($fetched_data | $m))
 			fi
 		else
 			# srli
-			echo srli
 			fetched_data=$(($rs1 >> $shamt))
 		fi
 	esac
+	limit_width
+	set_to_rd
+}
+
+reg_ops() {
+	load_from_rs1
+	load_from_rs2
+
+	case $((($inst >> 12) & 0x7)) in
+	0)	# 000, add/sub
+		if [ $(($inst & 0x40000000)) != 0 ]; then
+			fetched_data=$(($rs1 - $rs2))
+		else
+			fetched_data=$(($rs1 + $rs2))
+		fi ;;
+	1)	# 001, sll
+		fetched_data=$(($rs1 << ($rs2 & 0x1f))) ;;
+	2)	# 010, slt
+		fetched_data=$rs2
+		if less_than_data_sign $rs1; then
+			fetched_data=1
+		else
+			fetched_data=0
+		fi ;;
+	3)	# 011, sltu
+		fetched_data=$rs2
+		if less_than_data $rs1; then
+			fetched_data=1
+		else
+			fetched_data=0
+		fi ;;
+	4)	# 100, xor
+		fetched_data=$(($rs1 ^ $rs2)) ;;
+	5)	# 101, srl/sra
+		rs2=$(($rs2 & 0x1f))
+		fetched_data=$(($rs1 >> $rs2))
+		if [ $(($inst & 0x40000000)) != 0 ]; then
+			local sign=$(($rs1 & 0x80000000))
+			if [ $sign != 0 ]; then
+				local m=$(((1 << ($rs2 + 1)) - 1))
+				m=$(($m << (32 - $rs2)))
+				fetched_data=$(($fetched_data | $m))
+			fi
+		fi ;;
+	6)	# 110, or
+		fetched_data=$(($rs1 | $rs2)) ;;
+	7)	# 111, and
+		fetched_data=$(($rs1 & $rs2)) ;;
+	*)	unsupported_instruction ;;
+	esac
+
 	limit_width
 	set_to_rd
 }
@@ -285,8 +333,12 @@ while true; do
 	case $(($inst & 0x7f)) in
 	$((0x03)))	# load ops
 		load_ops ;;
+	$((0x0f)))	# fence
+		;;
 	$((0x23)))	# store ops
 		store_ops ;;
+	$((0x33)))	# reg ops
+		reg_ops ;;
 	$((0x37)))	# lui
 		fetched_data=$(($inst & 0xfffff000))
 		set_to_rd ;;
