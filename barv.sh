@@ -27,10 +27,10 @@ echo Register Num: ${#reg[@]}
 
 # $1: addr, $2: data
 store_long_arg() {
-	mem[$(($1 + 0))]=$((($2 >> 24) & 0xff))
-	mem[$(($1 + 1))]=$((($2 >> 16) & 0xff))
-	mem[$(($1 + 2))]=$((($2 >> 8) & 0xff))
-	mem[$(($1 + 3))]=$((($2 >> 0) & 0xff))
+	mem[$(($1 + 3))]=$((($2 >> 24) & 0xff))
+	mem[$(($1 + 2))]=$((($2 >> 16) & 0xff))
+	mem[$(($1 + 1))]=$((($2 >> 8) & 0xff))
+	mem[$(($1 + 0))]=$((($2 >> 0) & 0xff))
 }
 
 # $1: addr
@@ -39,7 +39,7 @@ load_long() {
 	local b=${mem[$(($1 + 1))]}
 	local c=${mem[$(($1 + 2))]}
 	local d=${mem[$(($1 + 3))]}
-	fetched_data=$((($a << 24) | ($b << 16) | ($c << 8) | ($d << 0)))
+	fetched_data=$((($a << 0) | ($b << 8) | ($c << 16) | ($d << 24)))
 }
 
 load_into_memory() {
@@ -47,9 +47,9 @@ load_into_memory() {
 	local filename=$2
 
 	local i=0
-	for long in `hexdump -ve '"%d "' $filename`; do
-		store_long_arg $i $long
-		i=$(($i + 4))
+	for byte in `od -An -v -td1 $filename`; do
+		mem[$i]=$(($byte & 0xff))
+		i=$(($i + 1))
 	done
 }
 
@@ -266,7 +266,7 @@ reg_ops() {
 load_short() {
 	local a=${mem[$(($1 + 0))]}
 	local b=${mem[$(($1 + 1))]}
-	fetched_data=$(((a << 8) | (b << 0)))
+	fetched_data=$(((a << 0) | (b << 8)))
 }
 
 unsupported_instruction() {
@@ -286,6 +286,7 @@ load_ops() {
 
 	case $((($inst >> 12) & 0x7)) in
 	0)	# 000, lb
+		echo $addr
 		fetched_data=${mem[$addr]}
 		sign_extend8 ;;
 	1)	# 001, lh
@@ -306,8 +307,8 @@ load_ops() {
 
 # $1: addr, $2: data
 store_short_arg() {
-	mem[$(($1 + 0))]=$((($2 >> 8) & 0xff))
-	mem[$(($1 + 1))]=$((($2 >> 0) & 0xff))
+	mem[$(($1 + 0))]=$((($2 >> 0) & 0xff))
+	mem[$(($1 + 1))]=$((($2 >> 8) & 0xff))
 }
 
 store_ops() {
@@ -455,5 +456,3 @@ while true; do
 		unsupported_instruction ;;
 	esac
 done
-
-dump_registers
