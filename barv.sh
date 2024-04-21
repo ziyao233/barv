@@ -5,8 +5,6 @@
 #	This file is distributed under Mozilla Public License Version 2.0
 #	Copyright (c) 2024 Yao Zi. All rights reserved.
 
-set -e
-
 memsize=$((1024 * 64))
 mem=()
 reg=()
@@ -114,6 +112,12 @@ sign_extend12() {
 sign_extend16() {
 	if [ $(($fetched_data & 0x8000)) == 32768 ]; then
 		fetched_data=$(($fetched_data | 0xffff0000))
+	fi
+}
+
+sign_extend20() {
+	if [ $(($fetched_data & 0x80000)) != 0 ]; then
+		fetched_data=$(($fetched_data | 0xfff00000))
 	fi
 }
 
@@ -267,7 +271,7 @@ load_short() {
 
 unsupported_instruction() {
 	echo unsupported instruction
-	echo "native representation (inst: $inst), (pc: $pc - 4)"
+	echo "native representation (inst: $inst), (pc: $reg_pc - 4)"
 	printf "instruction %08x, pc=%08x\n" $inst $(($reg_pc - 4))
 	exit -1
 }
@@ -327,6 +331,71 @@ store_ops() {
 	esac
 }
 
+cond_branch() {
+	local imm=$((($inst >> 31) << 11))
+	imm=$(($imm | (($inst >> 21) & 0x3f0)))
+	imm=$(($imm | (($inst >> 8) & 0xf)))
+	imm=$(($imm | (($inst << 3) & 0x400)))
+	imm=$(($imm << 1))
+	fetched_data=$imm
+	sign_extend12
+	imm=$fetched_data
+
+	load_from_rs1
+	load_from_rs2
+
+	local b=0
+	case $((($inst >> 12) & 0x7)) in
+	0)	# beq
+		[ $rs1 == $rs2 ]
+		b=$? ;;
+	1)	# bne
+		[ $rs1 != $rs2 ]
+		b=$? ;;
+	4)	# blt
+		fetched_data=$rs2
+		less_than_data_sign $rs1
+		b=$? ;;
+	5)	# bge
+		if [ $rs1 != $rs2 ]; then
+			fetched_data=$rs1
+			less_than_data_sign $rs2
+			b=$?
+		fi ;;
+	6)	# bltu
+		fetched_data=$rs2
+		less_than_data $rs1
+		b=$? ;;
+	7)	# bgeu
+		if [ $rs1 != $rs2 ]; then
+			fetched_data=$rs1
+			less_than_data $rs2
+			b=$?
+		fi ;;
+	*)	unsupported_instruction ;;
+	esac
+
+	if [ $b == 0 ]; then
+		fetched_data=$(($imm + $reg_pc - 4))
+		limit_width
+		reg_pc=$fetched_data
+	fi
+	return 0
+}
+
+do_ecall() {
+	local a0=${reg[10]}
+	local a1=${reg[11]}
+	case ${reg[10]} in
+	1)	# print register
+		printf "register print: %08x (%d)\n" $a1 $a1 ;;
+	2)	# print character
+		printf "\x$(printf %x $(($a1 & 0xff)))" ;;
+	*)	echo unsupported ecall, a0 = $a0
+		printf "pc=%08x\n" $(($reg_pc - 4))
+	esac
+}
+
 while true; do
 	fetch_inst
 
@@ -335,6 +404,8 @@ while true; do
 		load_ops ;;
 	$((0x0f)))	# fence
 		;;
+	$((0x13)))	# imm ops
+		imm_ops ;;
 	$((0x23)))	# store ops
 		store_ops ;;
 	$((0x33)))	# reg ops
@@ -346,12 +417,38 @@ while true; do
 		fetched_data=$((($inst & 0xfffff000) + $reg_pc - 4))
 		limit_width
 		set_to_rd ;;
-	$((0x13)))	# imm ops
-		imm_ops ;;
+	$((0x63)))	# conditional branching
+		cond_branch ;;
+	$((0x67)))	# jalr
+		load_from_rs1
+		fetched_data=$(($inst >> 20))
+		sign_extend12
+		r=$reg_pc
+		fetched_data=$(($fetched_data + $rs1))
+		limit_width
+		reg_pc=$fetched_data
+		fetched_data=$r
+		set_to_rd ;;
+	$((0x6f)))	# jal
+		fetched_data=$(((($inst >> 31) << 19) | (($inst >> 21) & 0x3ff)))
+		fetched_data=$(($fetched_data | (($inst >> 10) & 0x400)))
+		fetched_data=$(($fetched_data | (($inst & 0xff000) >> 1)))
+		sign_extend20
+		fetched_data=$((($fetched_data << 1) + ($reg_pc - 4)))
+		limit_width
+		r=$reg_pc
+		reg_pc=$fetched_data
+		fetched_data=$r
+		set_to_rd ;;
 	$((0x73)))	# 0x73, ebreak/ecall
 		if [ $(($inst >> 20)) == 0 ]; then
-			break;
+			# ecall
+			if [ ${reg[10]} == 0 ]; then
+				break;
+			fi
+			do_ecall
 		else
+			# ebreak
 			dump_registers
 		fi ;;
 	*)
@@ -359,5 +456,4 @@ while true; do
 	esac
 done
 
-echo "shutdown with ecall"
 dump_registers
