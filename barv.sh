@@ -424,7 +424,7 @@ while true; do
 		fetched_data=$(($inst >> 20))
 		sign_extend12
 		r=$reg_pc
-		fetched_data=$(($fetched_data + $rs1))
+		fetched_data=$((($fetched_data + $rs1) & ~1))
 		limit_width
 		reg_pc=$fetched_data
 		fetched_data=$r
